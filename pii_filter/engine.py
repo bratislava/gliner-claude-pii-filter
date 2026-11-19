@@ -10,34 +10,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from . import config
 from .masking import build_skeleton
 from .regexes import Span, find_regex_spans
 
 log = logging.getLogger("pii_filter.engine")
 
 MODEL_ID = os.environ.get("PII_MODEL_ID", "fastino/gliner2-privacy-filter-PII-multi")
-
-# model label -> (placeholder label, threshold)
-MODEL_LABELS: Dict[str, Tuple[str, float]] = {
-    "person": ("PERSON", 0.6),
-    "address": ("ADDRESS", 0.5),
-    "street_address": ("ADDRESS", 0.5),
-    "date_of_birth": ("DATE_OF_BIRTH", 0.7),
-    "national_id_number": ("NATIONAL_ID", 0.5),
-    "passport_number": ("PASSPORT", 0.5),
-    "drivers_license_number": ("DRIVERS_LICENSE", 0.5),
-    "tax_id": ("TAX_ID", 0.7),
-    "bank_account": ("BANK_ACCOUNT", 0.6),
-    "card_number": ("CARD_NUMBER", 0.6),
-    "phone_number": ("PHONE", 0.6),
-    "email": ("EMAIL", 0.6),
-    "iban": ("IBAN", 0.6),
-    "username": ("USERNAME", 0.9),
-    "password": ("SECRET", 0.5),
-    "secret": ("SECRET", 0.75),
-    "api_key": ("SECRET", 0.75),
-    "access_token": ("SECRET", 0.75),
-}
 
 # generic account / log words the model likes to tag as USERNAME or PERSON
 GENERIC_VALUES = {
@@ -91,12 +70,16 @@ class Model:
         return self._m
 
     @staticmethod
-    def _convert(res: Dict[str, Any]) -> List[Span]:
+    def _labels() -> Dict[str, float]:
+        return config.load().model_labels
+
+    @staticmethod
+    def _convert(res: Dict[str, Any], labels: Dict[str, float]) -> List[Span]:
         out: List[Span] = []
         for lab, items in (res.get("entities") or {}).items():
-            if lab not in MODEL_LABELS:
+            if lab not in labels:
                 continue
-            plabel, thr = MODEL_LABELS[lab]
+            plabel, thr = config.MODEL_LABEL_MAP[lab], labels[lab]
             for it in items or []:
                 conf = float(it.get("confidence", 1.0))
                 if conf < thr or it.get("start") is None:
@@ -106,19 +89,25 @@ class Model:
 
     def batch(self, texts: List[str]) -> List[List[Span]]:
         m = self._require()
+        labels = self._labels()
+        if not labels:
+            return [[] for _ in texts]
         with self._lock:
-            res = m.batch_extract_entities(texts, list(MODEL_LABELS), batch_size=BATCH_SIZE,
-                                           threshold=0.5, include_spans=True,
+            res = m.batch_extract_entities(texts, list(labels), batch_size=BATCH_SIZE,
+                                           threshold=min(labels.values()), include_spans=True,
                                            include_confidence=True)
-        return [self._convert(r) for r in res]
+        return [self._convert(r, labels) for r in res]
 
     def long(self, text: str) -> List[Span]:
         m = self._require()
+        labels = self._labels()
+        if not labels:
+            return []
         with self._lock:
-            res = m.extract_entities_long(text, list(MODEL_LABELS), threshold=0.5,
+            res = m.extract_entities_long(text, list(labels), threshold=min(labels.values()),
                                           chunk_size=384, chunk_overlap=64, batch_size=8,
                                           include_spans=True, include_confidence=True)
-        return self._convert(res)
+        return self._convert(res, labels)
 
 
 # ------------------------------------------------------------------ analysis
@@ -159,6 +148,17 @@ def merge_spans(spans: List[Span]) -> List[Span]:
 
 
 _TRIM = " \t\r\n\"',;:()[]{}<>"
+_IDENT_CHARS = re.compile(r"[-_/@\d:.=]")
+
+
+def _implausible_person(s: Span, value: str) -> bool:
+    """Model PERSON hits that look like identifiers (strapi-editor, nadacia, @scope/pkg)."""
+    if s.label != "PERSON" or s.source != "model":
+        return False
+    if not any(c.isupper() for c in value) or _IDENT_CHARS.search(value):
+        return True
+    # a lone capitalised word ("Strapi", "Docker") needs high confidence
+    return len(value.split()) == 1 and s.score < 0.9
 
 
 def _trim(text: str, s: Span) -> Optional[Span]:
@@ -211,10 +211,11 @@ class Engine:
         t0 = time.time()
         spans: List[Span] = []
         groups: Dict[str, List[Tuple[int, str, Any]]] = {}
+        disabled = set(config.load().regex_disabled)
         for off, u in units:
             if not u.strip():
                 continue
-            rs = find_regex_spans(u)
+            rs = [r for r in find_regex_spans(u) if r.label not in disabled]
             spans.extend(Span(off + s.start, off + s.end, s.label, s.source, s.score) for s in rs)
             if use_model:
                 sk = build_skeleton(u, rs, document)
@@ -261,6 +262,9 @@ class Engine:
         trimmed = [t for t in (_trim(doc_text, s) for s in spans) if t]
         trimmed = [t for t in trimmed if not (t.source == "model" and
                                               doc_text[t.start:t.end].lower() in GENERIC_VALUES)]
+        trimmed = [t for t in trimmed if not _implausible_person(t, doc_text[t.start:t.end])]
+        cfg = config.load()
+        trimmed = [t for t in trimmed if not cfg.allowed(t.label, doc_text[t.start:t.end])]
         return merge_spans(trimmed)
 
     # -- public

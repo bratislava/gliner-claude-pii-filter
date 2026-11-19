@@ -64,6 +64,22 @@ Environment variables:
 - `PII_REVIEW_TTL_S` sets how long a review can stay pending (default 900).
 - `PII_DEADLINE_S` sets how long the client waits for a decision (default 570).
 
+## Tuning (`config.toml`)
+
+Copy `config.example.toml` to `config.toml`. It is reloaded on save, so no restart is needed.
+
+- **`[model.labels]`**: the categories GLiNER looks for, each with its confidence threshold.
+  - Defaults: `person`, `address`/`street_address`, `national_id_number`, `passport_number` and `drivers_license_number`.
+  - Structured data (emails, phones, IBAN/accounts, RČ/IČO/DIČ, cards, public IPs, secrets) is left to the checksum-validated regexes. Model labels such as `username` or `secret` caused mostly false positives on slugs, IDs and role names.
+  - Add a line to enable another label (the full list is in the file header). Raise a threshold to make a label stricter.
+- **`[regex] disabled`**: turns off regex detectors, e.g. `["IP_ADDRESS"]`.
+- **`[allow]`**: values that are never flagged.
+  - `values`: exact values, case-insensitive. Ticking **remember un-redacted values** on the review page appends here.
+  - `patterns`: regexes matched against the whole flagged value.
+  - `email_domains`: email addresses on these domains are kept.
+
+Model `PERSON` hits that look like identifiers (no uppercase letter, or containing `-_/@:.=` or digits) are always dropped. A single capitalised word needs a confidence of at least 0.9.
+
 ## Installed into
 
 - `~/Library/LaunchAgents/sk.local.pii-filter.plist`, generated from `deploy/sk.local.pii-filter.plist.template`

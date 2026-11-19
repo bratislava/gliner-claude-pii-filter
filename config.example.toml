@@ -1,0 +1,23 @@
+# pii-filter config. Reloaded automatically when saved.
+# Available model labels: person, address, street_address, national_id_number, passport_number, drivers_license_number, date_of_birth, tax_id, bank_account, card_number, phone_number, email, iban, username, password, secret, api_key, access_token
+
+[model.labels]
+# label = confidence threshold (0-1); remove a line to stop the model looking for it
+person = 0.6
+address = 0.5
+street_address = 0.5
+national_id_number = 0.6
+passport_number = 0.6
+drivers_license_number = 0.6
+
+[regex]
+# regex detectors to turn off, e.g. ["IP_ADDRESS"]
+disabled = []
+
+[allow]
+# values never redacted (case-insensitive); "Remember" on the review page appends here
+values = []
+# regexes matched against the whole flagged value
+patterns = []
+# email domains never redacted, e.g. ["example.org"]
+email_domains = []

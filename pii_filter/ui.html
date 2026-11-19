@@ -90,11 +90,14 @@ async function reviewPage(id) {
       <button class="primary" id="approve">Approve &amp; send</button>
       <button class="danger" id="reject">Reject</button>
       <button id="addsel" disabled>Redact selection</button>
+      <button id="unall">Un-redact all</button>
+      <button id="reall">Redact all</button>
+      <label class="tog" title="Un-redacted values are added to the allowlist in config.toml and won't be flagged again"><input type="checkbox" id="remember"> remember un-redacted values</label>
       <label class="tog"><input type="checkbox" id="onlyhits" checked> only lines with detections</label>
       <label class="tog"><input type="checkbox" id="prev"> preview what Claude sees</label>
       <input type="text" id="note" placeholder="Optional note to Claude">
     </div>
-    <div class="help">Click a highlight to un-redact it (false positive). Select text and press “Redact selection” (or R) to add one.</div>
+    <div class="help">Click a highlight to un-redact it (false positive). Select text and press “Redact selection” (or R) to add one. Tick “remember” to never flag the un-redacted values again.</div>
   </header>
   <main><div id="doc"></div><pre id="preview"></pre></main>`;
 
@@ -167,6 +170,8 @@ async function reviewPage(id) {
     renderDoc(); refreshPreview();
   });
   $('#onlyhits').onchange = renderDoc;
+  $('#unall').onclick = () => { spans.forEach(s => disabled.add(s.id)); renderDoc(); refreshPreview(); };
+  $('#reall').onclick = () => { disabled.clear(); renderDoc(); refreshPreview(); };
 
   async function refreshPreview() {
     if (!$('#prev').checked) return;
@@ -183,7 +188,7 @@ async function reviewPage(id) {
   async function decide(decision) {
     $('#approve').disabled = $('#reject').disabled = true;
     const res = await fetch(`/api/reviews/${id}/decision`, {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({decision, disabled:[...disabled], added, note: $('#note').value})});
+      body: JSON.stringify({decision, disabled:[...disabled], added, note: $('#note').value, remember: $('#remember').checked})});
     const out = res.ok ? (await res.json()).status : 'error';
     app.innerHTML = `<div class="done">${out === 'approved' ? '✅ Approved — sent to Claude.' : out === 'rejected' ? '⛔ Rejected — Claude was told the output was withheld.' : 'Already decided or expired: ' + esc(out)}
       <div class="help" style="margin-top:12px"><a href="/reviews">Pending reviews</a> · this tab can be closed.</div></div>`;

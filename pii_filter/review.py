@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from . import config
 from .engine import Analysis, assign_placeholders, merge_spans
 from .regexes import Span
 
@@ -95,7 +96,7 @@ class ReviewStore:
         return r.analysis.render(assign_placeholders(r.analysis.doc_text, spans))
 
     def decide(self, rid: str, decision: str, disabled: List[int], added: List[Tuple[int, int]],
-               note: str) -> Review:
+               note: str, remember: bool = False) -> Review:
         r = self.get(rid)
         if r is None:
             raise KeyError(rid)
@@ -103,6 +104,11 @@ class ReviewStore:
             return r
         r.note = (note or "").strip()[:2000]
         r.edits = {"unredacted": len(set(disabled)), "added": len(added)}
+        if remember and disabled:
+            a = r.analysis
+            vals = [a.doc_text[a.spans[i].start:a.spans[i].end] for i in set(disabled)
+                    if 0 <= i < len(a.spans)]
+            r.edits["remembered"] = config.add_allowed_values(vals)
         if decision == "approve":
             r.output = self.preview(r, disabled, added)
             self._finish(r, "approved")

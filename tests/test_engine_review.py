@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from pii_filter import config
 from pii_filter import review as review_mod
 from pii_filter.engine import Engine, assign_placeholders
 from pii_filter.masking import build_skeleton
@@ -26,6 +27,13 @@ class FakeModel:
             out.append(Span(i, i + 9, "PERSON", "model", 0.9))
             i = t.find("Ján Novák", i + 1)
         return out
+
+
+@pytest.fixture(autouse=True)
+def isolated_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.toml")
+    monkeypatch.setattr(config, "_cache", None)
+    monkeypatch.setattr(config, "_mtime", None)
 
 
 @pytest.fixture
@@ -122,3 +130,46 @@ def test_reject(engine, store):
     r = store.submit(engine.analyze("hi Ján Novák"), "test", "")
     r = store.decide(r.id, "reject", [], [], note="too sensitive")
     assert r.status == "rejected" and r.output is None and r.note == "too sensitive"
+
+
+def write_config(text):
+    config.CONFIG_PATH.write_text(text, encoding="utf-8")
+    config._cache = None
+
+
+def test_allowlist_values_patterns_and_email_domains(engine):
+    write_config('[allow]\nvalues = ["ján novák"]\npatterns = ["v3_\\\\d+"]\n'
+                 'email_domains = ["example.org"]\n')
+    t = "Ján Novák mailed eva@example.org and jan@novak.sk about doc 900101/1239"
+    a = engine.analyze(t, "text")
+    got = {(s.label, t[s.start:s.end]) for s in a.spans}
+    assert got == {("EMAIL", "jan@novak.sk"), ("NATIONAL_ID", "900101/1239")}
+
+
+def test_regex_detector_can_be_disabled(engine):
+    write_config('[regex]\ndisabled = ["IP_ADDRESS"]\n')
+    assert engine.analyze("from 85.237.1.2", "text").spans == []
+
+
+def test_default_model_labels_are_narrow():
+    labels = set(config.load().model_labels)
+    assert "username" not in labels and "secret" not in labels and "phone_number" not in labels
+    assert {"person", "address", "passport_number"} <= labels
+
+
+def test_remember_adds_unredacted_values_to_allowlist(engine, store):
+    r = store.submit(engine.analyze("hi Ján Novák, mail jan@novak.sk", "text"), "test", "")
+    a = r.analysis
+    person = next(i for i, s in enumerate(a.spans) if s.label == "PERSON")
+    r = store.decide(r.id, "approve", [person], [], "", remember=True)
+    assert r.output == "hi Ján Novák, mail [EMAIL_1]"
+    assert config.load().allow_values == ["Ján Novák"]
+    again = engine.analyze("bye Ján Novák", "text")
+    assert again.spans == []
+
+
+def test_identifier_shaped_person_hits_are_dropped():
+    from pii_filter.engine import _implausible_person
+    p = lambda v, sc=0.99: _implausible_person(Span(0, 1, "PERSON", "model", sc), v)
+    assert p("strapi-editor") and p("nadacia") and p("@strapi") and p("v3_12") and p("Strapi", 0.8)
+    assert not p("Daniel Dudek", 0.7) and not p("Peter") and not p("Ján Novák", 0.65)

@@ -52,6 +52,7 @@ class DecisionReq(BaseModel):
     disabled: List[int] = []
     added: List[Tuple[int, int]] = []
     note: str = ""
+    remember: bool = False
 
 
 class PreviewReq(BaseModel):
@@ -61,7 +62,10 @@ class PreviewReq(BaseModel):
 
 @app.get("/health")
 def health():
+    from . import config
+    cfg = config.load()
     return {"ok": engine.model.ready, "model_loaded": engine.model.ready,
+            "model_labels": cfg.model_labels, "allow_values": len(cfg.allow_values),
             "model_error": engine.model.error, "load_seconds": engine.model.load_seconds,
             "pending": len(store.pending())}
 
@@ -129,7 +133,7 @@ def api_decide(rid: str, req: DecisionReq):
     if req.decision not in ("approve", "reject"):
         raise HTTPException(400, "decision must be approve or reject")
     try:
-        r = store.decide(rid, req.decision, req.disabled, req.added, req.note)
+        r = store.decide(rid, req.decision, req.disabled, req.added, req.note, req.remember)
     except KeyError:
         raise HTTPException(404, "unknown or expired review")
     return {"status": r.status}
