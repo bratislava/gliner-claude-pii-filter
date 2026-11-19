@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PII review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#fbfbfa; --fg:#1d1d1f; --muted:#6b6b70; --line:#e4e4e2; --hl:#ffe08a; --hl-off:#e9e9e9;
+          --man:#ffc0a8; --ok:#1f7a3d; --bad:#b3261e; --card:#fff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161618; --fg:#ececec; --muted:#9a9aa0; --line:#2c2c30; --hl:#6b5512; --hl-off:#333;
+            --man:#7a3a22; --ok:#4cc276; --bad:#ff7b72; --card:#1e1e21; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:var(--fg); }
+  header { position:sticky; top:0; z-index:5; background:var(--bg); border-bottom:1px solid var(--line); padding:12px 20px; }
+  h1 { font-size:16px; margin:0 0 4px; }
+  .meta { color:var(--muted); font-size:12px; }
+  .meta code { color:var(--fg); background:var(--card); border:1px solid var(--line); padding:1px 5px; border-radius:4px; word-break:break-all; }
+  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  button { font:inherit; padding:6px 14px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
+  button.primary { background:var(--ok); color:#fff; border-color:var(--ok); }
+  button.danger { color:var(--bad); border-color:var(--bad); }
+  button:disabled { opacity:.5; cursor:default; }
+  label.tog { color:var(--muted); font-size:12px; display:flex; gap:4px; align-items:center; }
+  input[type=text] { font:inherit; flex:1; min-width:220px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); }
+  .warn { background:#fff4ce; color:#5c4400; border:1px solid #e8cf6b; padding:6px 10px; border-radius:6px; margin-top:8px; font-size:12px; }
+  @media (prefers-color-scheme: dark) { .warn { background:#3a3112; color:#f1dc8a; border-color:#6b5512; } }
+  .chips span { display:inline-block; font-size:11px; padding:1px 7px; margin:2px 4px 0 0; border-radius:10px; background:var(--card); border:1px solid var(--line); }
+  main { padding:12px 20px 80px; }
+  #doc { font:12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:pre-wrap; word-break:break-word;
+         background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .ln { display:block; min-height:1.5em; }
+  .ln.hidden { display:none; }
+  .gap { color:var(--muted); font-style:italic; display:block; }
+  mark { background:var(--hl); color:inherit; border-radius:3px; padding:0 1px; cursor:pointer; }
+  mark::after { content:attr(data-label); font:600 9px/1 -apple-system, sans-serif; vertical-align:super; margin-left:2px; color:var(--muted); }
+  mark.off { background:var(--hl-off); text-decoration:line-through; }
+  mark.man { background:var(--man); }
+  #preview { display:none; white-space:pre-wrap; word-break:break-word; font:12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+             background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin:0; }
+  .done { padding:40px; text-align:center; font-size:16px; }
+  table { border-collapse:collapse; width:100%; background:var(--card); }
+  td, th { border-bottom:1px solid var(--line); padding:8px; text-align:left; font-size:13px; }
+  .help { color:var(--muted); font-size:12px; margin-top:6px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const $ = (s, el=document) => el.querySelector(s);
+const esc = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const app = $('#app');
+const path = location.pathname;
+const rid = (path.match(/^\/review\/([0-9a-f]{32})$/) || [])[1];
+
+if (!rid) queuePage(); else reviewPage(rid);
+
+async function queuePage() {
+  async function render() {
+    const items = await (await fetch('/api/reviews')).json();
+    app.innerHTML = `<header><h1>PII filter — pending reviews (${items.length})</h1>
+      <div class="meta">Auto-refreshes. Results with no detections are auto-approved and never appear here.</div></header>
+      <main>${items.length ? `<table><tr><th>Waiting</th><th>Source</th><th>Context</th><th>Detections</th></tr>
+      ${items.map(r => `<tr><td>${Math.round(Date.now()/1000 - r.created)}s</td><td>${esc(r.source)}</td>
+        <td><a href="/review/${r.id}"><code>${esc(r.context || '(none)').slice(0, 160)}</code></a></td>
+        <td>${Object.entries(r.counts||{}).map(([k,v]) => `${v}× ${esc(k)}`).join(', ')}</td></tr>`).join('')}</table>`
+      : '<div class="done">Nothing waiting.</div>'}</main>`;
+  }
+  await render(); setInterval(render, 3000);
+}
+
+async function reviewPage(id) {
+  const res = await fetch(`/api/reviews/${id}`);
+  if (!res.ok) { app.innerHTML = `<div class="done">Review not found or already expired.</div>`; return; }
+  const r = await res.json();
+  if (r.status !== 'pending') { app.innerHTML = `<div class="done">Already decided: <b>${esc(r.status)}</b>.</div>`; return; }
+  document.title = `PII review — ${r.source}`;
+  const doc = r.doc_text, spans = r.spans;
+  const disabled = new Set();
+  const added = [];   // [start, end]
+
+  app.innerHTML = `
+  <header>
+    <h1>Review before sending to Claude</h1>
+    <div class="meta">Source <code>${esc(r.source)}</code> · ${esc(r.kind)} · ${doc.length.toLocaleString()} chars
+      ${r.context ? `<div style="margin-top:4px">Command / context: <code>${esc(r.context)}</code></div>` : ''}</div>
+    <div class="chips" id="chips"></div>
+    ${!r.model_complete ? `<div class="warn">Model check incomplete — some content was checked by regex only. ${esc((r.notes||[]).join(' '))}</div>` : ''}
+    <div class="bar">
+      <button class="primary" id="approve">Approve &amp; send</button>
+      <button class="danger" id="reject">Reject</button>
+      <button id="addsel" disabled>Redact selection</button>
+      <label class="tog"><input type="checkbox" id="onlyhits" checked> only lines with detections</label>
+      <label class="tog"><input type="checkbox" id="prev"> preview what Claude sees</label>
+      <input type="text" id="note" placeholder="Optional note to Claude">
+    </div>
+    <div class="help">Click a highlight to un-redact it (false positive). Select text and press “Redact selection” (or R) to add one.</div>
+  </header>
+  <main><div id="doc"></div><pre id="preview"></pre></main>`;
+
+  const docEl = $('#doc');
+  function chips() {
+    const c = {};
+    spans.forEach(s => { if (!disabled.has(s.id)) c[s.label] = (c[s.label]||0) + 1; });
+    if (added.length) c.MANUAL = added.length;
+    $('#chips').innerHTML = Object.entries(c).map(([k,v]) => `<span>${v}× ${esc(k)}</span>`).join('') +
+      (disabled.size ? `<span>${disabled.size} un-redacted</span>` : '');
+  }
+
+  function renderDoc() {
+    const all = spans.map(s => ({...s, man:false})).concat(added.map((a,i) => ({id:'m'+i, start:a[0], end:a[1], label:'MANUAL', man:true})))
+                     .sort((a,b) => a.start - b.start);
+    // build lines with absolute offsets
+    const lines = []; let off = 0;
+    for (const t of doc.split('\n')) { lines.push([off, off + t.length]); off += t.length + 1; }
+    const only = $('#onlyhits').checked;
+    let si = 0, html = '', skipped = 0;
+    for (const [ls, le] of lines) {
+      while (si < all.length && all[si].end <= ls) si++;
+      const hits = []; for (let k = si; k < all.length && all[k].start < le; k++) hits.push(all[k]);
+      if (only && !hits.length) { skipped++; continue; }
+      if (skipped) { html += `<span class="gap">… ${skipped} line(s) without detections hidden …</span>`; skipped = 0; }
+      let pos = ls, line = '';
+      for (const h of hits) {
+        const a = Math.max(h.start, ls), b = Math.min(h.end, le);
+        if (a < pos) continue;
+        if (a > pos) line += `<span data-o="${pos}">${esc(doc.slice(pos, a))}</span>`;
+        const cls = h.man ? 'man' : (disabled.has(h.id) ? 'off' : '');
+        line += `<mark data-id="${h.id}" data-o="${a}" data-label="${esc(h.label)}${h.score && !h.man ? ' ' + Math.round(h.score*100) : ''}" class="${cls}" title="${esc(h.source||'manual')}">${esc(doc.slice(a, b))}</mark>`;
+        pos = b;
+      }
+      if (pos < le) line += `<span data-o="${pos}">${esc(doc.slice(pos, le))}</span>`;
+      html += `<span class="ln">${line || '&nbsp;'}</span>`;
+    }
+    if (skipped) html += `<span class="gap">… ${skipped} line(s) without detections hidden …</span>`;
+    docEl.innerHTML = html;
+    chips();
+  }
+
+  function offsetOf(node, o) {
+    let el = node.nodeType === 3 ? node.parentElement : node;
+    if (!el || el.dataset.o === undefined) return null;
+    return parseInt(el.dataset.o, 10) + (node.nodeType === 3 ? o : 0);
+  }
+  function selRange() {
+    const s = getSelection();
+    if (!s.rangeCount || s.isCollapsed) return null;
+    const r = s.getRangeAt(0);
+    let a = offsetOf(r.startContainer, r.startOffset), b = offsetOf(r.endContainer, r.endOffset);
+    if (a === null || b === null) return null;
+    if (b < a) [a, b] = [b, a];
+    return b > a ? [a, b] : null;
+  }
+  function addSelection() {
+    const rg = selRange(); if (!rg) return;
+    added.push(rg); getSelection().removeAllRanges(); renderDoc(); refreshPreview();
+  }
+  document.addEventListener('selectionchange', () => { $('#addsel').disabled = !selRange(); });
+  $('#addsel').onclick = addSelection;
+  document.addEventListener('keydown', e => { if (e.key === 'r' && e.target.tagName !== 'INPUT') addSelection(); });
+
+  docEl.addEventListener('click', e => {
+    const m = e.target.closest('mark'); if (!m || getSelection().toString()) return;
+    const id = m.dataset.id;
+    if (id.startsWith('m')) { added.splice(+id.slice(1), 1); }
+    else { const n = +id; disabled.has(n) ? disabled.delete(n) : disabled.add(n); }
+    renderDoc(); refreshPreview();
+  });
+  $('#onlyhits').onchange = renderDoc;
+
+  async function refreshPreview() {
+    if (!$('#prev').checked) return;
+    const res = await fetch(`/api/reviews/${id}/preview`, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({disabled:[...disabled], added})});
+    $('#preview').textContent = res.ok ? (await res.json()).output : 'Preview unavailable (review no longer pending).';
+  }
+  $('#prev').onchange = async () => {
+    const on = $('#prev').checked;
+    docEl.style.display = on ? 'none' : ''; $('#preview').style.display = on ? 'block' : 'none';
+    await refreshPreview();
+  };
+
+  async function decide(decision) {
+    $('#approve').disabled = $('#reject').disabled = true;
+    const res = await fetch(`/api/reviews/${id}/decision`, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({decision, disabled:[...disabled], added, note: $('#note').value})});
+    const out = res.ok ? (await res.json()).status : 'error';
+    app.innerHTML = `<div class="done">${out === 'approved' ? '✅ Approved — sent to Claude.' : out === 'rejected' ? '⛔ Rejected — Claude was told the output was withheld.' : 'Already decided or expired: ' + esc(out)}
+      <div class="help" style="margin-top:12px"><a href="/reviews">Pending reviews</a> · this tab can be closed.</div></div>`;
+  }
+  $('#approve').onclick = () => decide('approve');
+  $('#reject').onclick = () => decide('reject');
+
+  // if there are few lines, show everything
+  if (doc.split('\n').length <= 60) $('#onlyhits').checked = false;
+  renderDoc();
+}
+</script>
+</body>
+</html>
