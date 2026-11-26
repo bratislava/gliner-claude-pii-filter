@@ -25,7 +25,7 @@ Claude ─ PostToolUse (MCP loki) ──┘                           └► fou
 ## Install (macOS, Python 3.10+)
 
 ```sh
-git clone https://github.com/mpinter/gliner-claude-pii-filter ~/tools/pii-filter && cd ~/tools/pii-filter
+git clone https://github.com/bratislava/gliner-claude-pii-filter ~/tools/pii-filter && cd ~/tools/pii-filter
 python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
 .venv/bin/python -c "from gliner2 import AutoExtractor; AutoExtractor.from_pretrained('fastino/gliner2-privacy-filter-PII-multi')"  # download model once
 sed "s#__REPO__#$PWD#g" deploy/sk.local.pii-filter.plist.template > ~/Library/LaunchAgents/sk.local.pii-filter.plist
